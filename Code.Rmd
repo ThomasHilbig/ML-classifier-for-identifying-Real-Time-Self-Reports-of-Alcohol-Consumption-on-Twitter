@@ -1,0 +1,147 @@
+---
+title: Appendix 1 - "R" Code to Construct the Classifier and Dictionary
+author: "Thomas Hilbig"
+date: "26 August 2018"
+output: word_document
+---
+# R Markdown
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+This R Markdown document contains the code used for the dissertation "Identifying "real-time, self-reports of alcohol consumption" on Twitter using Machine Learning", authored by Thomas Hilbig. The code is divided into two sections; the first half details the contruction of the Naive Bayes classifier while the latter half details the code used to construc the dictionary. 
+
+## Construction of the Naive Bayes Classifier
+
+
+#Setup
+```{r, warning=FALSE, message=FALSE}
+#Libraries
+library(tm)
+library(RTextTools)
+library(e1071)
+library(dplyr)
+library(caret)
+library(doMC)
+library(wordcloud)
+#Register all available cores
+registerDoMC(cores=detectCores())
+#Setup Working Directory
+setwd("C:/Users/thoma/OneDrive/University/Dissertation/Data")
+#Read in Data
+df<- read.csv("pn_alcoholtweets_2col.csv", header=TRUE, stringsAsFactors = FALSE)
+```
+#Data Pre-processing
+```{r, warning=FALSE, message=FALSE}
+#Adjust Column Names
+colnames(df) <- c("text", "class")
+#Randomise the Row Datasets
+set.seed(1)
+df <- df[sample(nrow(df)), ]
+df <- df[sample(nrow(df)), ]
+#Convert the 'class' variable from character to factor.
+df$class <- as.factor(df$class)
+#Clear Encoding Related Issues
+df$text <- gsub("Ã", '""', df$text)
+df$text <- gsub("f", '""', df$text)
+df$text <- gsub("Â", '""', df$text)
+
+#Bag of Words Tokenisation
+corpus <- Corpus(VectorSource(df$text))
+
+#Import customised stopword list based on Chorus' stoplist.
+stopwords <- read.csv("word.csv", header = FALSE)
+stopwords <- as.character(stopwords$V1)
+stopwords <- c(stopwords, stopwords())
+#Remove stopwords from corpus of tweets.
+text <- VectorSource(text)
+text <- VCorpus(text)
+text <- tm_map(text, content_transformer(tolower))
+text <- tm_map(text, removeWords, stopwords)
+text <- tm_map(text, stripWhitespace)
+#Remove URLs
+removeURL <- function(x) gsub("http[[:alnum:]]*", "", x)
+#Remove usernames
+removeUsername <-function(x) gsub("[@][a - zA - Z0 - 9_]{1,15}", "", x)
+#Data Cleanup using dplyrs pipe utility (Transforming all text to lower case, removing punctuation, removing numbers, removing stopwords, removing URLs and removing usernames)
+corpus.clean <- tm_map(corpus, content_transformer(tolower))
+corpus.clean <- tm_map(corpus.clean, removePunctuation)
+corpus.clean <- tm_map(corpus.clean, removeNumbers)
+corpus.clean <- tm_map(corpus.clean, removeWords, c(stopwords, "ãfâ"))
+corpus.clean <- tm_map(corpus.clean, removeURL)
+corpus.clean <- tm_map(corpus.clean, removeUsername)
+#Create a Document Term Matrix to represent the bag of words tokens
+dtm <- DocumentTermMatrix(corpus.clean)
+inspect(dtm[1:5, 10:20])
+```
+
+#Dataset Construction
+```{r, warning=FALSE, message=FALSE}
+#Create Training Dataset and Evaluation Dataset
+df.train <- df[1:2000,]
+df.test <- df[2001:3000,]
+dtm.train <- dtm[1:2000,]
+dtm.test <- dtm[2001:3000,]
+corpus.clean.train <- corpus.clean[1:2000]
+corpus.clean.test <- corpus.clean[2001:3000]
+#Removal of terms appearing below 5 times to prevent over-fitting
+fivefreq <- findFreqTerms(dtm.train, 5)
+dtm.train.nb <- DocumentTermMatrix(corpus.clean.train, control=list(dictionary = fivefreq))
+dtm.test.nb <- DocumentTermMatrix(corpus.clean.test, control=list(dictionary = fivefreq))
+```
+
+```{r, warning=FALSE, message=FALSE}
+#Function to convert the word frequencies to "1" (presence) and "0" (absence) values for the boolean classifier
+convert_count <- function(x) {
+  y <- ifelse(x > 0, 1,0)
+  y <- factor(y, levels=c(0,1), labels=c("No", "Yes"))
+  y
+}
+```
+
+```{r, warning=FALSE, message=FALSE}
+#Apply the function to get final training and testing DTMs
+trainNB <- apply(dtm.train.nb, 2, convert_count)
+testNB <- apply(dtm.test.nb, 2, convert_count)
+```
+
+#Constructing the binarised, boolean, Naive Bayes classifier
+```{r, warning=FALSE, message=FALSE}
+#Train the classifier
+system.time( classifier <- naiveBayes(trainNB, df.train$class, laplace = 1) )
+```
+
+#Evaluating the Classifier
+```{r, warning=FALSE, message=FALSE}
+# Use the NB classifier we built to make predictions on the test set.
+system.time( pred <- predict(classifier, newdata=testNB))
+# Create a truth table by tabulating the predicted class labels with the actual class labels 
+table("Predictions"= pred,  "Actual" = df.test$class )
+```
+
+##Constructing the Dictinoary
+```{r, warning=FALSE, message=FALSE}
+#Constructing a Dataset of only Positive Tweets
+alcohol <- subset(df, class == "p")
+#Removal of encoding issues, usernames and URLs.
+alcohol$text <- gsub("Ã", '"', alcohol$text)
+alcohol$text <- gsub("f", '""', alcohol$text)
+alcohol$text <- gsub("Â", '""', alcohol$text)
+alcohol$text <- gsub("@[a-z, A-Z]*", "", alcohol$text)
+alcohol$text <- gsub("http://t.co/[a-z,A-Z,0-9]*{8}", "", alcohol$text)
+#Corpus Construction
+alcoholcorpus <- Corpus(VectorSource(alcohol$text))
+#Data Preprocessing (Transforming all terms to lower case tweets and removal of punctuation, numbers, stopwords, usernames, and URLs)
+toSpace = content_transformer( function(x, pattern) gsub(pattern, " ", x))
+alcoholcorpus <- tm_map(alcoholcorpus, content_transformer(tolower))
+alcoholcorpus <- tm_map(alcoholcorpus, removePunctuation)
+alcoholcorpus <- tm_map(alcoholcorpus, removeNumbers)
+alcoholcorpus <- tm_map(alcoholcorpus, removeWords, stopwords)
+alcoholcorpus <- tm_map(alcoholcorpus, toSpace, "@[a-z, A-Z]*")
+alcoholcorpus <- tm_map(alcoholcorpus, removeURL)
+#Construction of the Term Document Matrix
+actdm <- TermDocumentMatrix(alcoholcorpus)
+m <- as.matrix(actdm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+#Construction of Dictionary
+findFreqTerms(actdm, lowfreq=16, highfreq=Inf)
+```
